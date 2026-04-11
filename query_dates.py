@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Query the infini-gram API for every date in a year across multiple format
 variations, and write results to a TSV file.
@@ -7,14 +6,16 @@ Index used: v4_dclm-baseline_llama (DCLM baseline corpus)
 """
 
 import csv
-import time
 import datetime
+import time
+
 import requests
-from collections import defaultdict
+from requests.adapters import HTTPAdapter, Retry
 
 API_URL = "https://api.infini-gram.io/"
 INDEX = "v4_dclm-baseline_llama"
 OUTPUT_FILE = "date_counts.tsv"
+
 
 # Ordinal suffixes for day numbers
 def ordinal(n: int) -> str:
@@ -25,51 +26,48 @@ def ordinal(n: int) -> str:
 
 def date_variants(month: int, day: int) -> list[str]:
     """Return all query string variants for a given month/day."""
-    dt = datetime.date(2001, month, day)  # non-leap year base
-    full_month = dt.strftime("%B")        # January
-    abbr_month = dt.strftime("%b")        # Jan
-    day_num = day                         # 1
-    day_ord = ordinal(day)                # 1st
+    dt = datetime.date(2000, month, day)  # non-leap year base
+    full_month = dt.strftime("%B")  # January
+    abbr_month = dt.strftime("%b")  # Jan
+    day_num = day  # 1
+    day_ord = ordinal(day)  # 1st
 
-    variants = [
-        f"{full_month} {day_num}",        # January 1
-        f"{full_month} {day_ord}",        # January 1st
-        f"{abbr_month} {day_num}",        # Jan 1
-        f"{abbr_month}. {day_num}",       # Jan. 1
-        f"{abbr_month} {day_ord}",        # Jan 1st
-    ]
+    variants = {
+        "full_month_day": f"{full_month} {day_num}",  # January 1
+        "full_month_ordinal": f"{full_month} {day_ord}",  # January 1st
+        "abbr_month_day": f"{abbr_month} {day_num}",  # Jan 1
+        "abbr_month_dot_day": f"{abbr_month}. {day_num}",  # Jan. 1
+        "abbr_month_ordinal": f"{abbr_month} {day_ord}",  # Jan 1st
+    }
+    ## IMPORTANT: MAY has duplicate values. abbr_month_day and full_month_day
+    ## are the same for May. I'm manually editing the generated tsv file since its
+    ## just simpler for me to calculate the total that way.
     return variants
 
 
-def query_count(query: str, retries: int = 4) -> int:
+def query_count(session: requests.Session, query: str) -> int:
     """Query infini-gram and return the count for the given string."""
     payload = {
         "index": INDEX,
         "query_type": "count",
         "query": query,
     }
-    delay = 2
-    for attempt in range(retries + 1):
-        try:
-            resp = requests.post(API_URL, json=payload, timeout=30)
-            resp.raise_for_status()
-            data = resp.json()
-            if "count" in data:
-                return int(data["count"])
-            else:
-                print(f"  Unexpected response for '{query}': {data}")
-                return 0
-        except Exception as exc:
-            if attempt < retries:
-                print(f"  Retrying '{query}' after error: {exc} (wait {delay}s)")
-                time.sleep(delay)
-                delay *= 2
-            else:
-                print(f"  Failed to query '{query}': {exc}")
-                return 0
+
+    try:
+        resp = session.post(API_URL, json=payload, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        if "count" in data:
+            return int(data["count"])
+        else:
+            print(f"  Unexpected response for '{query}': {data}")
+            return -1
+    except Exception as exc:
+        print(f"  Failed to query '{query}': {exc}")
+        return -1
 
 
-def all_dates_in_year(year: int = 2001) -> list[tuple[int, int]]:
+def all_dates_in_year(year: int = 2000) -> list[tuple[int, int]]:
     """Return (month, day) tuples for every day in the given year."""
     dates = []
     d = datetime.date(year, 1, 1)
@@ -80,48 +78,68 @@ def all_dates_in_year(year: int = 2001) -> list[tuple[int, int]]:
 
 
 def main():
-    year = 2001  # non-leap year; leap day handled separately
-    dates = all_dates_in_year(year)
-    # Also include Feb 29 for leap-year dates
-    dates_with_leap = dates + [(2, 29)]
-
-    results = []  # list of dicts
+    dates_with_leap = all_dates_in_year()
 
     total = len(dates_with_leap)
-    for i, (month, day) in enumerate(dates_with_leap, 1):
-        dt = datetime.date(2000 if (month == 2 and day == 29) else 2001, month, day)
-        date_label = dt.strftime("%B %-d")  # "January 1"
-        iso_label = f"{month:02d}-{day:02d}"
 
-        variants = date_variants(month, day)
-        variant_counts: dict[str, int] = {}
-
-        print(f"[{i}/{total}] {date_label}")
-        for variant in variants:
-            count = query_count(variant)
-            variant_counts[variant] = count
-            print(f"  '{variant}': {count:,}")
-            time.sleep(0.1)  # gentle rate limiting
-
-        total_count = sum(variant_counts.values())
-        results.append({
-            "month": month,
-            "day": day,
-            "date_label": date_label,
-            "iso": iso_label,
-            "total_count": total_count,
-            **{f"count_{v}": c for v, c in variant_counts.items()},
-        })
+    retries = Retry(
+        total=8,  # Retry up to 5 times
+        backoff_factor=1,
+        status_forcelist=[403, 429, 500, 502, 503, 504],
+        allowed_methods=["POST"],
+    )
+    session = requests.Session()
+    session.mount("https://", HTTPAdapter(max_retries=retries))
 
     # Write TSV — one row per date, columns: iso, date_label, total_count, plus per-variant
-    with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as f:
+
+    with open(OUTPUT_FILE, "a", newline="", encoding="utf-8") as f:
         # Determine all variant column names from first result
-        variant_cols = [k for k in results[0] if k.startswith("count_")]
-        fieldnames = ["month", "day", "iso", "date_label", "total_count"] + variant_cols
+        fieldnames = [
+            "month",
+            "day",
+            "iso",
+            "date_label",
+            "count_total",
+            "count_full_month_day",
+            "count_full_month_ordinal",
+            "count_abbr_month_day",
+            "count_abbr_month_dot_day",
+            "count_abbr_month_ordinal",
+        ]
+        # Initialize the file
         writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
         writer.writeheader()
-        for row in results:
-            writer.writerow(row)
+
+        for i, (month, day) in enumerate(dates_with_leap, 1):
+            dt = datetime.date(2000, month, day)
+            date_label = dt.strftime("%B %-d")  # "January 1"
+            iso_label = f"{month:02d}-{day:02d}"
+
+            variants = date_variants(month, day)
+            variant_counts: dict[str, int] = {}
+            print(f"[{i}/{total}] {date_label}")
+            for variant_name, variant in set(variants.items()):
+                variant_counts["count_" + variant_name] = 0
+                # Vecause of tokenizer, counting 'Jan 20' might also count Jan 2015 etc. This ensures that we're only looking for the exact date by counting 'Jan 20 ', 'Jan 20,'...
+                for ending_char in [" ", ",", ".", "!", "?"]:
+                    count = query_count(session, variant + ending_char)
+                    variant_counts["count_" + variant_name] += count
+                    time.sleep(0.1)
+                print(f"  '{variant}': {variant_counts['count_' + variant_name]:,}")
+                time.sleep(0.5)  # gentle rate limiting
+
+            total_count = sum(variant_counts.values())
+            result = {
+                "month": month,
+                "day": day,
+                "date_label": date_label,
+                "iso": iso_label,
+                "count_total": total_count,
+                **variant_counts,
+            }
+
+            writer.writerow(result)
 
     print(f"\nDone! Results saved to {OUTPUT_FILE}")
 
