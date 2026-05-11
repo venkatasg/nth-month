@@ -128,6 +128,14 @@ def main():
                     padded = variant[: -len(str(day))] + f"0{day}"
                     padded_day_first = " 0" + month_first_variant_name[1:]
                     var_types += [padded, padded_day_first]
+                if month == 9 and "abbr_" in variant_name:
+                    sept_variant = variant.replace("Sep", "Sept", 1)
+                    sept_day_first = " " + " ".join(sept_variant.split()[::-1])
+                    var_types += [sept_variant, sept_day_first]
+                    if day < 10 and "ordinal" not in variant_name:
+                        padded_sept = sept_variant[: -len(str(day))] + f"0{day}"
+                        padded_sept_day_first = " 0" + sept_day_first[1:]
+                        var_types += [padded_sept, padded_sept_day_first]
                 for var_type in var_types:
                     # Vecause of tokenizer, counting 'Jan 20' might also count Jan 2015 etc. This ensures that we're only looking for the exact date by counting 'Jan 20 ', 'Jan 20,'...
                     for ending_char in [" ", ",", ".", "!", "?", ";", ":", ")", "\n"]:
