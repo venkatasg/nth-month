@@ -1,8 +1,8 @@
 """
-Query the infini-gram API for every date in a year across multiple format
+Query the infini-gram-mini API for every date in a year across multiple format
 variations, and write results to a TSV file.
 
-Index used: v4_dclm-baseline_llama (DCLM baseline corpus)
+Index used: v2_dclm_all (DCLM corpus)
 """
 
 import csv
@@ -12,9 +12,9 @@ import time
 import requests
 from requests.adapters import HTTPAdapter, Retry
 
-API_URL = "https://api.infini-gram.io/"
-INDEX = "v4_dclm-baseline_llama"
-OUTPUT_FILE = "date_counts_dclm.tsv"
+API_URL = "https://api.infini-gram-mini.io/"
+INDEX = "v2_dclm_all"
+OUTPUT_FILE = "date_counts_mini.tsv"
 
 
 # Ordinal suffixes for day numbers
@@ -99,7 +99,7 @@ def date_variants(month: int, day: int) -> dict[str, list[str]]:
 
 
 def query_count(session: requests.Session, query: str) -> int:
-    """Query infini-gram and return the count for the given string."""
+    """Query infini-gram-mini and return the count for the given string."""
     payload = {
         "index": INDEX,
         "query_type": "count",
