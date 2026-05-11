@@ -40,8 +40,7 @@ def date_variants(month: int, day: int) -> list[str]:
         "abbr_month_ordinal": f"{abbr_month} {day_ord}",  # Jan 1st
     }
     ## IMPORTANT: MAY has duplicate values. abbr_month_day and full_month_day
-    ## are the same for May. I'm manually editing the generated tsv file since its
-    ## just simpler for me to calculate the total that way.
+    ## are the same for May
     return variants
 
 
@@ -121,15 +120,24 @@ def main():
             print(f"[{i}/{total}] {date_label}")
             for variant_name, variant in set(variants.items()):
                 variant_counts["count_" + variant_name] = 0
-                # Vecause of tokenizer, counting 'Jan 20' might also count Jan 2015 etc. This ensures that we're only looking for the exact date by counting 'Jan 20 ', 'Jan 20,'...
-                for ending_char in [" ", ",", ".", "!", "?"]:
-                    count = query_count(session, variant + ending_char)
-                    variant_counts["count_" + variant_name] += count
-                    time.sleep(0.1)
+
+                # We need two versions of the variant_name. One where the number is first and one where the month is first. I add a space before the number first variant because the token counts are exaggerated by double counting 21 June for 1 June etc
+                month_first_variant_name = " " + " ".join(variant.split()[::-1])
+                var_types = [variant, month_first_variant_name]
+                if day < 10 and "ordinal" not in variant_name:
+                    padded = variant[: -len(str(day))] + f"0{day}"
+                    padded_day_first = " 0" + month_first_variant_name[1:]
+                    var_types += [padded, padded_day_first]
+                for var_type in var_types:
+                    # Vecause of tokenizer, counting 'Jan 20' might also count Jan 2015 etc. This ensures that we're only looking for the exact date by counting 'Jan 20 ', 'Jan 20,'...
+                    for ending_char in [" ", ",", ".", "!", "?", ";", ":", ")", "\n"]:
+                        count = query_count(session, var_type + ending_char)
+                        variant_counts["count_" + variant_name] += count
+                        time.sleep(0.1)
                 print(f"  '{variant}': {variant_counts['count_' + variant_name]:,}")
                 time.sleep(0.5)  # gentle rate limiting
 
-            total_count = sum(variant_counts.values())
+            total_count = sum(set(variant_counts.values()))
             result = {
                 "month": month,
                 "day": day,
