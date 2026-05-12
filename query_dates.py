@@ -5,16 +5,16 @@ variations, and write results to a TSV file.
 Index used: v4_dclm-baseline_llama (DCLM baseline corpus)
 """
 
+import asyncio
 import csv
 import datetime
-import time
 
-import requests
-from requests.adapters import HTTPAdapter, Retry
+import aiohttp
 
 API_URL = "https://api.infini-gram.io/"
 INDEX = "v4_dclm-baseline_llama"
 OUTPUT_FILE = "date_counts_dclm.tsv"
+CONCURRENCY = 50
 
 
 # Ordinal suffixes for day numbers
@@ -31,20 +31,19 @@ LEADING_CHARS = {
     "newline": "\n",
     "paren": "(",
     "dquote": '"',
-    "squote": "'",
 }
 
 # To reduce false positive matches with other numbers or forms, appending most common characters after the date
-ENDING_CHARS = [" ", ",", ".", "!", "?", ";", ":", ")", "\n"]
+ENDING_CHARS = [" ", ",", ".", ":", ")", "\n"]
 
 
 def date_variants(month: int, day: int) -> dict[str, list[str]]:
-    """Return all query strings for a given month/day, grouped by column name.
+    """Return all ready-to-query strings for a given month/day, grouped into 4 columns.
 
-    Each key is a TSV column name suffix (prepend 'count_'). Each value is the
-    list of query strings whose counts are summed into that column: the
-    month-first form followed by one day-first form per LEADING_CHARS entry.
-    Trailing delimiters are added by the caller.
+    Keys: full_month_day, full_month_ordinal, abbr_month_day, abbr_month_ordinal.
+    Each value is the fully expanded list of query strings — every combination of
+    leading char (for day-first forms), base string, and trailing delimiter —
+    ready to be passed directly to query_count.
     """
     dt = datetime.date(2000, month, day)
     full_month = dt.strftime("%B")
@@ -53,71 +52,109 @@ def date_variants(month: int, day: int) -> dict[str, list[str]]:
     day_ord = ordinal(day)
     day_pad = f"0{day}" if day < 10 else None
 
-    variants: dict[str, list[str]] = {}
+    def mf_df(mf: str, df_base: str) -> list[str]:
+        queries = [mf, *[char + df_base for char in LEADING_CHARS.values()]]
+        return [
+            q + end
+            for q in queries
+            for end in ENDING_CHARS
+            if not (end == "." and "." in q)
+        ]
 
-    def add(name: str, mf: str, df_base: str) -> None:
-        variants[name] = [mf, *[char + df_base for char in LEADING_CHARS.values()]]
-
-    add("full_month_day", f"{full_month} {day_num}", f"{day_num} {full_month}")
-    add("full_month_ordinal", f"{full_month} {day_ord}", f"{day_ord} {full_month}")
-    add("abbr_month_dot_day", f"{abbr_month}. {day_num}", f"{day_num} {abbr_month}.")
-    # May: strftime("%b") == strftime("%B") == "May"; skip abbr to avoid double-counting
-    if month != 5:
-        add("abbr_month_day", f"{abbr_month} {day_num}", f"{day_num} {abbr_month}")
-        add("abbr_month_ordinal", f"{abbr_month} {day_ord}", f"{day_ord} {abbr_month}")
-
+    # full_month_day: "January 1", "January 01", and day-first equivalents
+    full_month_day = mf_df(f"{full_month} {day_num}", f"{day_num} {full_month}")
     if day_pad:
-        add("full_month_day_pad", f"{full_month} {day_pad}", f"{day_pad} {full_month}")
-        add(
-            "abbr_month_dot_day_pad",
-            f"{abbr_month}. {day_pad}",
-            f"{day_pad} {abbr_month}.",
-        )
-        if month != 5:
-            add(
-                "abbr_month_day_pad",
-                f"{abbr_month} {day_pad}",
-                f"{day_pad} {abbr_month}",
-            )
+        full_month_day += mf_df(f"{full_month} {day_pad}", f"{day_pad} {full_month}")
 
-    if month == 9:
-        add("abbr_month_day_sept", f"Sept {day_num}", f"{day_num} Sept")
-        add("abbr_month_dot_day_sept", f"Sept. {day_num}", f"{day_num} Sept.")
-        add("abbr_month_ordinal_sept", f"Sept {day_ord}", f"{day_ord} Sept")
+    # full_month_ordinal: "January 1st" and day-first
+    full_month_ordinal = mf_df(f"{full_month} {day_ord}", f"{day_ord} {full_month}")
+
+    # abbr_month_day: plain and dotted abbreviations, zero-padded, and Sept/Sept. for September
+    # May: strftime("%b") == strftime("%B") == "May", already counted in full_month_day
+    abbr_month_day: list[str] = []
+    if month != 5:
+        abbr_month_day += mf_df(f"{abbr_month} {day_num}", f"{day_num} {abbr_month}")
+        abbr_month_day += mf_df(f"{abbr_month}. {day_num}", f"{day_num} {abbr_month}.")
         if day_pad:
-            add("abbr_month_day_sept_pad", f"Sept {day_pad}", f"{day_pad} Sept")
-            add("abbr_month_dot_day_sept_pad", f"Sept. {day_pad}", f"{day_pad} Sept.")
+            abbr_month_day += mf_df(
+                f"{abbr_month} {day_pad}", f"{day_pad} {abbr_month}"
+            )
+            abbr_month_day += mf_df(
+                f"{abbr_month}. {day_pad}", f"{day_pad} {abbr_month}."
+            )
+    if month == 9:
+        for abbr in ["Sept", "Sept."]:
+            abbr_month_day += mf_df(f"{abbr} {day_num}", f"{day_num} {abbr}")
+            if day_pad:
+                abbr_month_day += mf_df(f"{abbr} {day_pad}", f"{day_pad} {abbr}")
 
-    # Purely numeric YYYY-MM-DD and YYYY/MM/DD forms. Querying "-MM-DD" / "/MM/DD"
-    # naturally anchors to the year-prefixed form — the separator itself is the
-    # left boundary, so no additional leading chars are needed.
-    month_str = f"{month:02d}"
-    day_str = f"{day:02d}"
-    variants["numeric"] = [f"-{month_str}-{day_str}", f"/{month_str}/{day_str}"]
+    # abbr_month_ordinal: "Jan 1st", "Jan. 1st", "Sept 1st", "Sept. 1st" and day-first
+    # May: already counted in full_month_ordinal
+    abbr_month_ordinal: list[str] = []
+    if month != 5:
+        abbr_month_ordinal += mf_df(
+            f"{abbr_month} {day_ord}", f"{day_ord} {abbr_month}"
+        )
+        abbr_month_ordinal += mf_df(
+            f"{abbr_month}. {day_ord}", f"{day_ord} {abbr_month}."
+        )
+    if month == 9:
+        abbr_month_ordinal += mf_df(f"Sept {day_ord}", f"{day_ord} Sept")
+        abbr_month_ordinal += mf_df(f"Sept. {day_ord}", f"{day_ord} Sept.")
 
-    return variants
-
-
-def query_count(session: requests.Session, query: str) -> int:
-    """Query infini-gram and return the count for the given string."""
-    payload = {
-        "index": INDEX,
-        "query_type": "count",
-        "query": query,
+    return {
+        "full_month_day": full_month_day,
+        "full_month_ordinal": full_month_ordinal,
+        "abbr_month_day": abbr_month_day,
+        "abbr_month_ordinal": abbr_month_ordinal,
     }
 
-    try:
-        resp = session.post(API_URL, json=payload, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        if "count" in data:
-            return int(data["count"])
-        else:
-            print(f"  Unexpected response for '{query}': {data}")
-            return -1
-    except Exception as exc:
-        print(f"  Failed to query '{query}': {exc}")
-        return -1
+
+async def query_count(
+    session: aiohttp.ClientSession, sem: asyncio.Semaphore, query: str
+) -> int:
+    """Query infini-gram and return the count for the given string."""
+    payload = {"index": INDEX, "query_type": "count", "query": query}
+    async with sem:
+        for attempt in range(8):
+            try:
+                async with session.post(
+                    API_URL,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status in (403, 429, 500, 502, 503, 504):
+                        await asyncio.sleep(2**attempt)
+                        continue
+                    resp.raise_for_status()
+                    data = await resp.json()
+                    if "count" in data:
+                        return int(data["count"])
+                    print(f"  Unexpected response for '{query}': {data}")
+                    return -1
+            except Exception as exc:
+                if attempt == 7:
+                    print(f"  Failed '{query}': {exc}")
+                    return -1
+                await asyncio.sleep(2**attempt)
+    return -1
+
+
+async def query_date(
+    session: aiohttp.ClientSession, sem: asyncio.Semaphore, month: int, day: int
+) -> dict[str, int]:
+    variants = date_variants(month, day)
+    col_tasks = {
+        col_name: [
+            asyncio.create_task(query_count(session, sem, q)) for q in queries
+        ]
+        for col_name, queries in variants.items()
+    }
+    counts: dict[str, int] = {}
+    for col_name, tasks in col_tasks.items():
+        results = await asyncio.gather(*tasks)
+        counts[col_name] = sum(r for r in results if r >= 0)
+    return counts
 
 
 def all_dates_in_year(year: int = 2000) -> list[tuple[int, int]]:
@@ -130,21 +167,9 @@ def all_dates_in_year(year: int = 2000) -> list[tuple[int, int]]:
     return dates
 
 
-def main():
-    dates_with_leap = all_dates_in_year()
-
-    total = len(dates_with_leap)
-
-    retries = Retry(
-        total=8,  # Retry up to 5 times
-        backoff_factor=1,
-        status_forcelist=[403, 429, 500, 502, 503, 504],
-        allowed_methods=["POST"],
-    )
-    session = requests.Session()
-    session.mount("https://", HTTPAdapter(max_retries=retries))
-
-    # September 1 has the largest variant set; use it to fix the TSV schema
+async def main_async() -> None:
+    dates = all_dates_in_year()
+    total = len(dates)
     all_variant_keys = list(date_variants(9, 1).keys())
     fieldnames = [
         "month",
@@ -155,39 +180,40 @@ def main():
         *[f"count_{k}" for k in all_variant_keys],
     ]
 
-    with open(OUTPUT_FILE, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
-        writer.writeheader()
+    sem = asyncio.Semaphore(CONCURRENCY)
+    connector = aiohttp.TCPConnector(limit=CONCURRENCY)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        with open(OUTPUT_FILE, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
+            writer.writeheader()
 
-        for i, (month, day) in enumerate(dates_with_leap, 1):
-            dt = datetime.date(2000, month, day)
-            date_label = dt.strftime("%B %-d")  # "January 1"
-            iso_label = f"{month:02d}-{day:02d}"
+            for i, (month, day) in enumerate(dates, 1):
+                dt = datetime.date(2000, month, day)
+                date_label = dt.strftime("%B %-d")
+                iso_label = f"{month:02d}-{day:02d}"
 
-            variants = date_variants(month, day)
-            variant_counts: dict[str, int] = {k: 0 for k in all_variant_keys}
-            print(f"[{i}/{total}] {date_label}")
-            for col_name, query_strings in variants.items():
-                for query_str in query_strings:
-                    for ending_char in ENDING_CHARS:
-                        variant_counts[col_name] += query_count(
-                            session, query_str + ending_char
-                        )
-                        time.sleep(0.1)
-                print(f"  '{col_name}': {variant_counts[col_name]:,}")
-                time.sleep(0.5)  # gentle rate limiting
+                print(f"[{i}/{total}] {date_label}")
+                variant_counts: dict[str, int] = {k: 0 for k in all_variant_keys}
+                counts = await query_date(session, sem, month, day)
+                variant_counts.update(counts)
+                for col_name, count in counts.items():
+                    print(f"  '{col_name}': {count:,}")
 
-            result = {
-                "month": month,
-                "day": day,
-                "date_label": date_label,
-                "iso": iso_label,
-                "count_total": sum(variant_counts.values()),
-                **{f"count_{k}": variant_counts[k] for k in all_variant_keys},
-            }
-            writer.writerow(result)
+                result = {
+                    "month": month,
+                    "day": day,
+                    "date_label": date_label,
+                    "iso": iso_label,
+                    "count_total": sum(variant_counts.values()),
+                    **{f"count_{k}": variant_counts[k] for k in all_variant_keys},
+                }
+                writer.writerow(result)
 
     print(f"\nDone! Results saved to {OUTPUT_FILE}")
+
+
+def main() -> None:
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":
