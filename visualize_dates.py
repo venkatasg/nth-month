@@ -52,7 +52,7 @@ def main():
         fig.patch.set_facecolor("white")
 
         fig.suptitle(
-            "CALENDAR OF\nMEANINGFUL DATES ON THE WEB",
+            TITLE,
             fontsize=32,
             fontweight="bold",
             va="bottom",
