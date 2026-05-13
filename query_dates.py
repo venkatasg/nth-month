@@ -1,19 +1,20 @@
 """
-Query the infini-gram API for every date in a year across multiple format
-variations, and write results to a TSV file.
+Query the infini-gram (or infini-gram mini) API for every date in a year across
+multiple format variations, and write results to a TSV file.
 
-Index used: v4_dclm-baseline_llama (DCLM baseline corpus)
+Indices used: v4_dclm-baseline_llama or v2_dclm_all (DCLM baseline corpus)
 """
 
+import argparse
 import asyncio
 import csv
 import datetime
 
 import aiohttp
 
-API_URL = "https://api.infini-gram.io/"
-INDEX = "v4_dclm-baseline_llama"
-OUTPUT_FILE = "date_counts_dclm.tsv"
+API_URL = "https://api.infini-gram.io/"  # or https://api.infini-gram-mini.io/
+INDEX = "v4_dclm-baseline_llama"  # or v2_dclm_all
+OUTPUT_FILE = "date_counts.tsv"  # or date_counts_mini.tsv
 CONCURRENCY = 50
 
 
@@ -145,9 +146,7 @@ async def query_date(
 ) -> dict[str, int]:
     variants = date_variants(month, day)
     col_tasks = {
-        col_name: [
-            asyncio.create_task(query_count(session, sem, q)) for q in queries
-        ]
+        col_name: [asyncio.create_task(query_count(session, sem, q)) for q in queries]
         for col_name, queries in variants.items()
     }
     counts: dict[str, int] = {}
@@ -183,7 +182,7 @@ async def main_async() -> None:
     sem = asyncio.Semaphore(CONCURRENCY)
     connector = aiohttp.TCPConnector(limit=CONCURRENCY)
     async with aiohttp.ClientSession(connector=connector) as session:
-        with open(OUTPUT_FILE, "a", newline="", encoding="utf-8") as f:
+        with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
             writer.writeheader()
 
@@ -213,6 +212,18 @@ async def main_async() -> None:
 
 
 def main() -> None:
+    global API_URL, INDEX, OUTPUT_FILE
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--mini",
+        action="store_true",
+        help="Use infini-gram-mini API with v2_dclm_all index",
+    )
+    args = parser.parse_args()
+    if args.mini:
+        API_URL = "https://api.infini-gram-mini.io/"
+        INDEX = "v2_dclm_all"
+        OUTPUT_FILE = "date_counts_mini.tsv"
     asyncio.run(main_async())
 
 
