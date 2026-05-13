@@ -26,13 +26,14 @@ def load_data(path: str) -> dict[tuple[int, int], int]:
 
 
 def main():
-    for OUT_FILENAME, IN_FILENAME, TITLE in zip(
-        ["calendar_DCLM.png", "calendar_Pile.png"],
+    for OUT_FILENAME, IN_FILENAME, TITLE, corpus_name in zip(
+        ["calendar_dclm.png", "calendar_pile.png"],
         ["date_counts_dclm.tsv", "date_counts_pile.tsv"],
         [
             "CALENDAR OF\nMEANINGFUL DATES ON THE WEB",
             "CALENDAR OF\nMEANINGFUL DATES FOR AN LLM",
         ],
+        ["DCLM", "The Pile"],
     ):
         counts = load_data(IN_FILENAME)
 
@@ -58,7 +59,6 @@ def main():
             va="bottom",
             y=0.93,
         )
-        corpus_name = OUT_FILENAME[9:13]
         fig.text(
             0.5,
             0.925,
