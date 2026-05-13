@@ -12,9 +12,9 @@ import datetime
 
 import aiohttp
 
-API_URL = "https://api.infini-gram.io/"  # or https://api.infini-gram-mini.io/
-INDEX = "v4_dclm-baseline_llama"  # or v2_dclm_all
-OUTPUT_FILE = "date_counts.tsv"  # or date_counts_mini.tsv
+INDEX = "v2_dclm_all"
+API_URL = "https://api.infini-gram-mini.io/"
+OUTPUT_FILE = "date_counts.tsv"
 CONCURRENCY = 50
 
 
@@ -212,18 +212,18 @@ async def main_async() -> None:
 
 
 def main() -> None:
-    global API_URL, INDEX, OUTPUT_FILE
+    global INDEX, OUTPUT_FILE
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--mini",
-        action="store_true",
-        help="Use infini-gram-mini API with v2_dclm_all index",
+        "--corpus",
+        type=str,
+        default="v2_dclm_all",
+        help="Corpus to query. Default is the DCLM corpus. You can also query v2_piletrain or CommonCrawl dumps. See https://infini-gram-mini.readthedocs.io/en/latest/api.html#overview",
     )
     args = parser.parse_args()
-    if args.mini:
-        API_URL = "https://api.infini-gram-mini.io/"
-        INDEX = "v2_dclm_all"
-        OUTPUT_FILE = "date_counts_mini.tsv"
+
+    INDEX = args.corpus
+    OUTPUT_FILE = "date_counts" + "_" + args.corpus + ".tsv"
     asyncio.run(main_async())
 
 

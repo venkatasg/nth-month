@@ -1,12 +1,10 @@
 # nth-month
 
-Which dates are most "meaningful" to an LLM? This project measures how often every calendar date is referenced by name in a large web-text corpus, then visualizes the results as a calendar where each date's font size reflects its prominence.
-
-Inspired by [xkcd #1140](https://xkcd.com/1140/) and [The Missing 11th of the Month](https://drhagen.com/blog/the-missing-11th-of-the-month/).
+Inspired by [xkcd #1140](https://xkcd.com/1140/) and [The Missing 11th of the Month](https://drhagen.com/blog/the-missing-11th-of-the-month/), I wanted to  measure how often every calendar date is referenced by name in a large web-text corpus (and a language modeling corpus), then visualize the results as a calendar similar to the comic. Here are the results:
 
 ## How it works
 
-1. **`query_dates.py`** — For every day of the year, queries a search API against the DCLM corpus. Each date is queried in four groups of surface-form variants:
+1. **`query_dates.py`** — For every day of the year, queries the [Infini-gram-mini API]() against the [DCLM]()/[Pile-train]() corpus. Each date is queried in four groups of surface-form variants:
    - **full_month_day**: "January 1", "January 01", and day-first equivalents
    - **full_month_ordinal**: "January 1st" and day-first equivalents
    - **abbr_month_day**: "Jan 1", "Jan. 1", "Jan 01", and day-first equivalents; plus "Sept"/"Sept." for September
@@ -18,23 +16,10 @@ Inspired by [xkcd #1140](https://xkcd.com/1140/) and [The Missing 11th of the Mo
 
 2. **`visualize_dates.py`** — Reads a counts TSV and produces a 4×3 calendar grid where each day number is sized by its rank among all 366 dates. The top 3 dates are rendered extra-large.
 
-### Two backends
-
-Both are accessible from the same script via the `--mini` flag:
-
-| Flag | API | Index | Matching |
-|---|---|---|---|
-| _(default)_ | [infini-gram](https://api.infini-gram.io/) | `v4_dclm-baseline_llama` | Token-level (suffix array) |
-| `--mini` | [infini-gram-mini](https://api.infini-gram-mini.io/) | `v2_dclm_all` | Character-level (FM-Index) |
-
-infini-gram uses a token-level suffix array, so tokenizer artifacts (e.g. the token for "20" being a prefix of "2015") require the delimiter approach. infini-gram-mini uses character-level FM-Index matching, which doesn't have tokenizer artifacts, but the same delimiter logic is applied for consistency and correctness.
-
 ## Output
 
-- `date_counts.tsv` — counts from infini-gram; one row per date, with columns: `month`, `day`, `iso`, `date_label`, `count_total`, and per-variant counts.
-- `date_counts_mini.tsv` — same schema, counts from infini-gram-mini.
-- `calendar_meaningful_dates.png` — the final calendar infographic.
-- `calendar_meaningful_dates_mini.png` — infographic from infini-gram-mini counts.
+- `date_counts_{corpus}.tsv` — counts from infini-gram-mini; one row per date, with columns: `month`, `day`, `iso`, `date_label`, `count_total`, and per-variant counts.
+- `calendar_{corpus}.png` — the final calendar infographic.
 
 ## Setup
 
@@ -46,23 +31,16 @@ uv sync
 
 ## Usage
 
-Query all dates using infini-gram (token-level):
+Query all dates using infini-gram-mini:
 
 ```bash
 uv run python query_dates.py
 ```
 
-Query all dates using infini-gram-mini (character-level):
+Generate the calendar visualizations:
 
 ```bash
-uv run python query_dates.py --mini
-```
-
-Generate the calendar visualization:
-
-```bash
-uv run python visualize_dates.py        # uses date_counts.tsv
-uv run python visualize_dates.py --mini # uses date_counts_mini.tsv
+uv run python visualize_dates.py
 ```
 
 The visualization uses the `xkcd Script` font — install it on your system if the labels render in a fallback font.
