@@ -1,4 +1,4 @@
-# nth-month
+# Meaningful dates on the web and for a language model
 
 Inspired by [xkcd #1140](https://xkcd.com/1140/) and [The Missing 11th of the Month](https://drhagen.com/blog/the-missing-11th-of-the-month/), I wanted to  measure how often every calendar date is referenced by name in a large web-text corpus (and a language modeling corpus), then visualize the results as a calendar similar to the comic. Here are the results:
 
